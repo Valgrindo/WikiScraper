@@ -8,8 +8,10 @@ of words.
 
 from sys import argv
 import requests
+import StringUtils as su
 
 # Denotes which version of Wikipedia to source articles from
+MAX_TAG = 11  # An HTML tag cannot be longer than 11 characters
 SUPPORTED_LOCALES = {'EN', 'NL'}
 API_KEYS = \
     {
@@ -54,59 +56,82 @@ def validate_params():
         PARAMS['out_file'] = argv[4]
 
 
-def get_article_ids():
+def get_article_wikitext(count):
     """
-    Query Wikipedia API for a set of X random article IDs.
-    :return: (List[string]) -- Sequence of IDs of random articles.
+    Fetch the wikitext of X random wikipedia articles.
+    :param count: (int) -- How many articles to get the wikitext from.
+    :return: (list[str]) -- A list of raw wikitext from random articles.
     """
     session = requests.Session()
     url = API_KEYS[PARAMS['locale']]
 
-    settings = {
-        "action": "query",
-        "format": "json",
-        "list": "random",
-        "rnlimit": PARAMS['articles']
-    }
-
-    reply = session.get(url=url, params=settings)
-    parsed = reply.json()
-
-    # According to https://www.mediawiki.org/wiki/API:Random, the reply is formatted as follows:
-    # {
-    # "batchcomplete": "",
-    # "continue": {
-    #     "rncontinue": "0.559881820010|0.559881954661|47659388|0",
-    #     "continue": "-||"
-    # },
-    # "query": {
-    #     "random": [
-    #         {
-    #             "id": 32381675,
-    #             "ns": 0,
-    #             "title": "Mallabhum Institute of Technology"
-    #         },
-    #         ...
-    #    ]
-    # }
-    # Keep IDs as strings, since they could be too large for an int.
-    ids = [str(x['id']) for x in parsed['query']['random']]
-
-    return ids
-
-
-def get_article_wikitext(ids):
     settings = \
         {
             'action': 'query',
             'prop': 'revisions',
             'rvprop': 'content',
             'format': 'json',
-            'formatversion': 2,
-            'pageids': '|'.join(ids)
+            'generator': 'random',
+            'grnnamespace': 0,
+            'grnlimit': count
         }
 
-    pass
+    reply = session.get(url=url, params=settings)
+    parsed = reply.json()
+    result = [page['revisions'][0]['*'] for page in parsed['query']['pages'].values()]
+
+    return result
+
+
+def clean_wikitext(source):
+    """
+    Remove all non-natural language constructs from wiki text, sacrificing some if necessary.
+        Things removed:
+          =headers= of any level
+          '''preformatted'''
+          [[links]]
+          {{tables}}
+          <tag> Embedded HTML </tag>
+          '*' and '#' list markers
+    :param source: (list[str])
+    :return:
+    """
+
+    result = ''
+    i = 0
+
+    while i < len(source):
+        if source[i] in {'=', '\'', '*', '#'}:
+            i += 1  # Simply skip these characters. Text can be preserved
+        elif su.is_substring_at(source, i, '{{'):
+            i = su.string_skip(source, (i + 2), '}}', '{{')
+        elif su.is_substring_at(source, i, '[['):
+            i = su.string_skip(source, (i + 2), ']]', '[[')
+        elif su.is_substring_at(source, i, '{|'):
+            i = su.string_skip(source, (i + 2), '|}', '{|')
+        elif su.is_substring_at(source, i, '['):
+            i = su.string_skip(source, (i + 1), ']', '[')
+        elif su.is_substring_at(source, i, '<'):
+            i = su.string_skip(source, (i + 1), '>', '<')
+        # elif source[i] == '<':  # TODO Debug this
+        #     j = source[i:i+MAX_TAG].find('>')
+        #     if j > -1:
+        #         tag = source[i:i+j+1]
+        #         start = i
+        #         if tag[len(tag)-2:len(tag)] == '/>':  # If the HTML tag was self-closing, skip just the tag.
+        #             i = su.string_skip(source, i, tag)
+        #         else:
+        #             i = su.string_skip(source, i + len(tag), f'</{tag[1:]}', tag)
+        #
+        #         print(f'Skipped: {source[start:i]}')
+        #     else:
+        #         i += 1
+        else:
+            result += source[i]  # There was nothing wrong with the character. Save it to the result.
+            i += 1
+
+    return result
+
 
 
 def main():
@@ -115,8 +140,15 @@ def main():
         exit(1)
 
     validate_params()  # Validate command line args.
-    ids = get_article_ids()
+    content = get_article_wikitext(PARAMS['articles'])
 
+    # Wikitext has been acquired. Now, clean it to eliminate non-text constructs (tables) and some markup.
+    clean = []
+    for raw in content:
+        clean.append(clean_wikitext(raw))
+
+    # Text has been cleaned of most wiki symbols and mostly resembles natural language.
+    # Parse it into words, eliminating any loose punctuation.
 
 
 
