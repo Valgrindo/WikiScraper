@@ -9,9 +9,11 @@ of words.
 from sys import argv
 import requests
 import StringUtils as su
+from math import ceil
 
 # Denotes which version of Wikipedia to source articles from
 MAX_TAG = 11  # An HTML tag cannot be longer than 11 characters
+MAX_REQUEST = 50
 SUPPORTED_LOCALES = {'EN', 'NL'}
 API_KEYS = \
     {
@@ -62,23 +64,35 @@ def get_article_wikitext(count):
     :param count: (int) -- How many articles to get the wikitext from.
     :return: (list[str]) -- A list of raw wikitext from random articles.
     """
+    print("Fetching articles... ", end='')
     session = requests.Session()
     url = API_KEYS[PARAMS['locale']]
 
-    settings = \
-        {
-            'action': 'query',
-            'prop': 'revisions',
-            'rvprop': 'content',
-            'format': 'json',
-            'generator': 'random',
-            'grnnamespace': 0,
-            'grnlimit': count
-        }
+    got = 0
+    result = []
 
-    reply = session.get(url=url, params=settings)
-    parsed = reply.json()
-    result = [page['revisions'][0]['*'] for page in parsed['query']['pages'].values()]
+    while got < count:
+        batch = MAX_REQUEST  # Request the max allowed articles unless that would put us over the limit.
+        if (got + batch) > count:
+            batch = count - got
+
+        settings = \
+            {
+                'action': 'query',
+                'prop': 'revisions',
+                'rvprop': 'content',
+                'format': 'json',
+                'generator': 'random',
+                'grnnamespace': 0,
+                'grnlimit': batch
+            }
+
+        reply = session.get(url=url, params=settings)
+        parsed = reply.json()
+        result.extend([page['revisions'][0]['*'] for page in parsed['query']['pages'].values()])
+        got += batch
+
+    print('Done!')
 
     return result
 
@@ -96,7 +110,6 @@ def clean_wikitext(source):
     :param source: (list[str])
     :return:
     """
-
     result = ''
     i = 0
 
@@ -140,18 +153,21 @@ def store_clean_text(clean):
     :return: None
     """
 
+    print("Writing data to file... ", end='')
     with open(PARAMS['out_file'], 'wb+') as fp:
         buffer = []
         for string in clean:  # For each cleaned article
             tokens = string.split(' ')  # Break it up by space
             for t in tokens:
                 t = t.strip(' \t\n')
-                if t not in {'.', ',', '!', '?', ' ', ''}:  # Skip lonely punctuation.
+                if t not in {'.', ',', '!', '?', ' ', ''} and "http" not in t:  # Skip lonely punctuation and URLs.
                     buffer.append(t)
                 if len(buffer) == PARAMS['sample_length']:
                     to_write = f'{" ".join(buffer)}\r\n'
                     fp.write(to_write.encode('UTF-8'))  # Preserve Unicode chars
                     buffer = []
+
+    print("Done!")
 
 
 def main():
@@ -164,8 +180,10 @@ def main():
 
     # Wikitext has been acquired. Now, clean it to eliminate non-text constructs (tables) and some markup.
     clean = []
+    print("Cleaning WikiText... ", end='')
     for raw in content:
         clean.append(clean_wikitext(raw))
+    print('Done!')
 
     # Text has been cleaned of most wiki symbols and mostly resembles natural language.
     # Parse it into words, eliminating any loose punctuation.

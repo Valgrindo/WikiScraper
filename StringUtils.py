@@ -42,3 +42,6 @@ def string_skip(string, start_index, target, nested_by=''):
 
         # If no match, just continue
         i += 1
+
+    # if we made it here, the skip was unsuccessful.
+    return start_index
